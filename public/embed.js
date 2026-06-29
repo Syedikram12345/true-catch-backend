@@ -7,7 +7,9 @@
     return;
   }
 
-  const API_BASE = "http://localhost:5000/api/public";
+  // Derive the API base from wherever this script itself was loaded from
+  const scriptUrl = new URL(script.src);
+  const API_BASE = `${scriptUrl.origin}/api/public`;
 
   fetch(`${API_BASE}/popups/${popupId}`)
     .then((res) => res.json())
