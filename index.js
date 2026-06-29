@@ -233,6 +233,30 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
       return res.status(404).json({ error: "Popup not found." });
     }
 
+    // Find or create the contact for this email, scoped to the popup's owner
+    const contact = await prisma.contact.upsert({
+      where: {
+        userId_email: {
+          userId: popup.userId,
+          email,
+        },
+      },
+      update: {}, // contact already exists, nothing to change on the contact itself
+      create: {
+        email,
+        userId: popup.userId,
+      },
+    });
+
+    // Log this as an event on that contact's timeline
+    await prisma.event.create({
+      data: {
+        type: "popup_submitted",
+        metadata: { popupId: popup.id, popupTitle: popup.title },
+        contactId: contact.id,
+      },
+    });
+
     await prisma.popup.update({
       where: { id },
       data: { conversions: { increment: 1 } },
@@ -254,6 +278,60 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
     }
 
     res.json({ message: "Thank you!" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+app.post("/api/public/track", async (req, res) => {
+  try {
+    const { popupId, email, type, metadata } = req.body;
+
+    if (!email || !type) {
+      return res.status(400).json({ error: "email and type are required." });
+    }
+
+    // We need to know which TrueCatch user this event belongs to.
+    // For now, we derive it from a popup ID (since that's the only "identity" we have on a page).
+    const popup = await prisma.popup.findUnique({ where: { id: popupId } });
+
+    if (!popup) {
+      return res.status(404).json({ error: "Popup not found." });
+    }
+
+    const contact = await prisma.contact.upsert({
+      where: {
+        userId_email: { userId: popup.userId, email },
+      },
+      update: {},
+      create: { email, userId: popup.userId },
+    });
+
+    const event = await prisma.event.create({
+      data: {
+        type,
+        metadata: metadata || {},
+        contactId: contact.id,
+      },
+    });
+
+    res.status(201).json({ event });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+app.get("/api/contacts", authMiddleware, async (req, res) => {
+  try {
+    const contacts = await prisma.contact.findMany({
+      where: { userId: req.userId },
+      include: { events: { orderBy: { createdAt: "desc" } } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ contacts });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Something went wrong." });

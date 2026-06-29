@@ -19,6 +19,7 @@ model User {
   password  String
   createdAt DateTime @default(now())
   popups    Popup[]
+  contacts  Contact[]
 }
 
 model Popup {
@@ -33,4 +34,27 @@ model Popup {
 
   userId        String
   user          User     @relation(fields: [userId], references: [id])
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  email     String
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  events    Event[]
+
+  @@unique([userId, email]) // one contact per email, per TrueCatch account
+}
+
+model Event {
+  id         String   @id @default(uuid())
+  type       String   // "popup_submitted", "page_view", "clicked_pricing", etc.
+  metadata   Json?    // flexible extra info, e.g. { "popupId": "...", "page": "/pricing" }
+  createdAt  DateTime @default(now())
+
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id])
 }
