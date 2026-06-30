@@ -17,6 +17,8 @@ model User {
   name      String
   email     String   @unique
   password  String
+  siteId    String   @unique @default(uuid())
+  plan      String   @default("free") // "free" or "pro"
   createdAt DateTime @default(now())
   popups    Popup[]
   contacts  Contact[]

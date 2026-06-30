@@ -1,25 +1,33 @@
 (function () {
   const script = document.currentScript;
-  const popupId = script.getAttribute("data-popup-id");
+  const siteId = script.getAttribute("data-site-id");
 
-  if (!popupId) {
-    console.error("TrueCatch: missing data-popup-id attribute on script tag.");
+  if (!siteId) {
+    console.error("TrueCatch: missing data-site-id attribute on script tag.");
     return;
   }
 
-  // Derive the API base from wherever this script itself was loaded from
   const scriptUrl = new URL(script.src);
   const API_BASE = `${scriptUrl.origin}/api/public`;
 
-  fetch(`${API_BASE}/popups/${popupId}`)
+  fetch(`${API_BASE}/site/${siteId}`)
     .then((res) => res.json())
-    .then(({ popup }) => {
-      if (!popup) return;
-      setTimeout(() => showPopup(popup), popup.delaySeconds * 1000);
-    })
-    .catch((err) => console.error("TrueCatch: failed to load popup", err));
+    .then(({ widgets }) => {
+      if (!widgets) return;
 
-  function showPopup(popup) {
+      // Handle popups
+      if (widgets.popups && widgets.popups.length > 0) {
+        // For now, show the first popup only
+        // Later: show based on targeting rules, A/B tests, etc.
+        const popup = widgets.popups[0];
+        setTimeout(() => showPopup(popup, API_BASE), popup.delaySeconds * 1000);
+      }
+
+      // Future: handle toasters, banners, etc. here
+    })
+    .catch((err) => console.error("TrueCatch: failed to load widgets", err));
+
+  function showPopup(popup, API_BASE) {
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.bottom = "24px";
@@ -41,6 +49,7 @@
         <button id="tc-submit" style="background:#4f46e5;color:white;border:none;padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">${popup.buttonText}</button>
       </div>
       <p id="tc-message" style="margin:10px 0 0;font-size:13px;color:#16a34a;display:none;"></p>
+      <p style="margin:8px 0 0;font-size:10px;color:#ccc;text-align:right;">Powered by TrueCatch</p>
     `;
 
     document.body.appendChild(overlay);

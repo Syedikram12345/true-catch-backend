@@ -101,7 +101,14 @@ app.get("/api/me", authMiddleware, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
-      select: { id: true, name: true, email: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        siteId: true,
+        plan: true,
+        createdAt: true,
+      },
     });
 
     if (!user) {
@@ -332,6 +339,38 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
     });
 
     res.json({ contacts });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+// Public route — fetch all active widgets for a site (used by embed script)
+app.get("/api/public/site/:siteId", async (req, res) => {
+  try {
+    const { siteId } = req.params;
+
+    const user = await prisma.user.findUnique({
+      where: { siteId },
+      select: { id: true, plan: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "Site not found." });
+    }
+
+    const popups = await prisma.popup.findMany({
+      where: { userId: user.id },
+      select: {
+        id: true,
+        title: true,
+        message: true,
+        buttonText: true,
+        delaySeconds: true,
+      },
+    });
+
+    res.json({ siteId, plan: user.plan, widgets: { popups } });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Something went wrong." });
