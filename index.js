@@ -6,12 +6,19 @@ import prisma from "./prismaClient.js";
 import jwt from "jsonwebtoken";
 import authMiddleware from "./middleware/auth.js";
 import { Resend } from "resend";
+import Razorpay from "razorpay";
+import crypto from "crypto";
 
 dotenv.config();
 
 const app = express();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
 
 app.use(express.static("public"));
 
@@ -463,6 +470,57 @@ app.delete("/api/toasters/:id", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+app.post("/api/payment/create-order", authMiddleware, async (req, res) => {
+  try {
+    const order = await razorpay.orders.create({
+      amount: 19900, // amount in paise (₹199 = 19900 paise)
+      currency: "INR",
+      receipt: `receipt_${req.userId}_${Date.now()}`,
+      notes: {
+        userId: req.userId,
+      },
+    });
+
+    res.json({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to create payment order." });
+  }
+});
+
+app.post("/api/payment/verify", authMiddleware, async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+      req.body;
+
+    // Verify the payment signature
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(body)
+      .digest("hex");
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({ error: "Invalid payment signature." });
+    }
+
+    // Upgrade the user to Pro
+    await prisma.user.update({
+      where: { id: req.userId },
+      data: { plan: "pro" },
+    });
+
+    res.json({ message: "Payment verified! You're now on Pro. 🎉" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Payment verification failed." });
   }
 });
 
