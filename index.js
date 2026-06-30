@@ -393,6 +393,45 @@ app.get("/api/public/site/:siteId", async (req, res) => {
       }),
     ]);
 
+    // Parse visitor's device/browser info
+    const userAgent = req.headers["user-agent"] || "";
+    const isMobile = /mobile/i.test(userAgent);
+    const isTablet = /tablet|ipad/i.test(userAgent);
+    const deviceType = isTablet ? "tablet" : isMobile ? "mobile" : "desktop";
+
+    const browserMatch = userAgent.match(
+      /(chrome|safari|firefox|edge|opera|brave)/i,
+    );
+    const browser = browserMatch ? browserMatch[0] : "Unknown";
+
+    const osMatch = userAgent.match(
+      /(windows|mac|linux|android|ios|iphone|ipad)/i,
+    );
+    const os = osMatch ? osMatch[0] : "Unknown";
+
+    // Record a PopupView for each popup
+    if (popups.length > 0) {
+      await Promise.all(
+        popups.map((popup) =>
+          prisma.popupView.create({
+            data: {
+              popupId: popup.id,
+              deviceType,
+              browser,
+              os,
+            },
+          }),
+        ),
+      );
+
+      // Increment views on each popup
+      await prisma.popup.updateMany({
+        where: { userId: user.id },
+        data: { views: { increment: 1 } },
+      });
+    }
+
+    // Track views for toasters
     if (toasters.length > 0) {
       await prisma.toaster.updateMany({
         where: { userId: user.id },
@@ -614,6 +653,77 @@ app.post("/api/payment/verify", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Payment verification failed." });
+  }
+});
+
+//_______________________________________________analytics route_______________________________________________________________________
+
+app.get("/api/analytics", authMiddleware, async (req, res) => {
+  try {
+    const token = req.userId;
+
+    // Get all popups for this user
+    const popups = await prisma.popup.findMany({
+      where: { userId: req.userId },
+      select: { id: true, title: true, views: true, conversions: true },
+    });
+
+    const popupIds = popups.map((p) => p.id);
+
+    // Get all PopupViews for this user's popups
+    const views = await prisma.popupView.findMany({
+      where: { popupId: { in: popupIds } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // Device breakdown
+    const deviceBreakdown = views.reduce((acc, v) => {
+      acc[v.deviceType] = (acc[v.deviceType] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Browser breakdown
+    const browserBreakdown = views.reduce((acc, v) => {
+      acc[v.browser] = (acc[v.browser] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Views over last 7 days
+    const last7Days = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date();
+      date.setDate(date.getDate() - (6 - i));
+      return date.toISOString().split("T")[0];
+    });
+
+    const viewsByDay = last7Days.map((date) => ({
+      date,
+      views: views.filter(
+        (v) => v.createdAt.toISOString().split("T")[0] === date,
+      ).length,
+    }));
+
+    // Top widgets by views
+    const topWidgets = popups
+      .sort((a, b) => b.views - a.views)
+      .slice(0, 5)
+      .map((p) => ({
+        name: p.title,
+        views: p.views,
+        conversions: p.conversions,
+        conversionRate:
+          p.views > 0 ? ((p.conversions / p.views) * 100).toFixed(1) : "0.0",
+      }));
+
+    res.json({
+      totalViews: views.length,
+      deviceBreakdown,
+      browserBreakdown,
+      viewsByDay,
+      topWidgets,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
   }
 });
 

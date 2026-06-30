@@ -39,6 +39,15 @@ model Popup {
   user          User     @relation(fields: [userId], references: [id])
 }
 
+model PopupView {
+  id         String   @id @default(uuid())
+  popupId    String
+  deviceType String
+  browser    String
+  os         String
+  createdAt  DateTime @default(now())
+}
+
 model Contact {
   id        String   @id @default(uuid())
   email     String
