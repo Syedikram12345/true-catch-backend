@@ -122,6 +122,71 @@ app.get("/api/me", authMiddleware, async (req, res) => {
   }
 });
 
+app.put("/api/me", authMiddleware, async (req, res) => {
+  try {
+    const { name, currentPassword, newPassword } = req.body;
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const updateData = {};
+
+    // Update name if provided
+    if (name && name.trim()) {
+      updateData.name = name.trim();
+    }
+
+    // Update password if provided
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          error: "Current password is required to set a new one.",
+        });
+      }
+
+      const passwordMatches = await bcrypt.compare(
+        currentPassword,
+        user.password,
+      );
+
+      if (!passwordMatches) {
+        return res
+          .status(401)
+          .json({ error: "Current password is incorrect." });
+      }
+
+      updateData.password = await bcrypt.hash(newPassword, 10);
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "Nothing to update." });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.userId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        siteId: true,
+        plan: true,
+        createdAt: true,
+      },
+    });
+
+    res.json({ message: "Profile updated!", user: updated });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
 // ─── Popups ──────────────────────────────────────────────────────
 app.post("/api/popups", authMiddleware, async (req, res) => {
   try {
