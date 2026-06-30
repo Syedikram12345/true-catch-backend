@@ -17,13 +17,19 @@
 
       // Handle popups
       if (widgets.popups && widgets.popups.length > 0) {
-        // For now, show the first popup only
-        // Later: show based on targeting rules, A/B tests, etc.
         const popup = widgets.popups[0];
         setTimeout(() => showPopup(popup, API_BASE), popup.delaySeconds * 1000);
       }
 
-      // Future: handle toasters, banners, etc. here
+      // Handle toasters
+      if (widgets.toasters && widgets.toasters.length > 0) {
+        const toaster = widgets.toasters[0];
+        if (toaster.triggerType === "immediate") {
+          showToaster(toaster);
+        } else {
+          setTimeout(() => showToaster(toaster), toaster.delaySeconds * 1000);
+        }
+      }
     })
     .catch((err) => console.error("TrueCatch: failed to load widgets", err));
 
@@ -76,6 +82,42 @@
           document.getElementById("tc-submit").style.display = "none";
         })
         .catch((err) => console.error("TrueCatch: submit failed", err));
+    });
+  }
+
+  function showToaster(toaster) {
+    const bar = document.createElement("div");
+    bar.style.position = "fixed";
+    bar.style.top = "0";
+    bar.style.left = "0";
+    bar.style.right = "0";
+    bar.style.background = toaster.bgColor || "#111827";
+    bar.style.color = "white";
+    bar.style.padding = "10px 16px";
+    bar.style.display = "flex";
+    bar.style.alignItems = "center";
+    bar.style.justifyContent = "center";
+    bar.style.gap = "12px";
+    bar.style.fontFamily = "Arial, sans-serif";
+    bar.style.fontSize = "14px";
+    bar.style.zIndex = "999998";
+
+    bar.innerHTML = `
+      <span>${toaster.message}</span>
+      ${
+        toaster.ctaText && toaster.ctaUrl
+          ? `<a href="${toaster.ctaUrl}" target="_blank" style="background:white;color:${toaster.bgColor || "#111827"};padding:4px 12px;border-radius:20px;font-size:13px;font-weight:600;text-decoration:none;">${toaster.ctaText}</a>`
+          : ""
+      }
+      <button id="tc-toast-close" style="background:none;border:none;color:white;font-size:18px;cursor:pointer;margin-left:auto;opacity:0.7;">✕</button>
+    `;
+
+    document.body.style.paddingTop = "44px";
+    document.body.prepend(bar);
+
+    document.getElementById("tc-toast-close").addEventListener("click", () => {
+      bar.remove();
+      document.body.style.paddingTop = "0";
     });
   }
 })();

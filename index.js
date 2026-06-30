@@ -359,18 +359,107 @@ app.get("/api/public/site/:siteId", async (req, res) => {
       return res.status(404).json({ error: "Site not found." });
     }
 
-    const popups = await prisma.popup.findMany({
-      where: { userId: user.id },
-      select: {
-        id: true,
-        title: true,
-        message: true,
-        buttonText: true,
-        delaySeconds: true,
+    const [popups, toasters] = await Promise.all([
+      prisma.popup.findMany({
+        where: { userId: user.id },
+        select: {
+          id: true,
+          title: true,
+          message: true,
+          buttonText: true,
+          delaySeconds: true,
+        },
+      }),
+      prisma.toaster.findMany({
+        where: { userId: user.id },
+        select: {
+          id: true,
+          message: true,
+          ctaText: true,
+          ctaUrl: true,
+          bgColor: true,
+          triggerType: true,
+          delaySeconds: true,
+        },
+      }),
+    ]);
+
+    // Track views for all toasters
+    if (toasters.length > 0) {
+      await prisma.toaster.updateMany({
+        where: { userId: user.id },
+        data: { views: { increment: 1 } },
+      });
+    }
+
+    res.json({ siteId, plan: user.plan, widgets: { popups, toasters } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+// Create a toaster
+app.post("/api/toasters", authMiddleware, async (req, res) => {
+  try {
+    const { message, ctaText, ctaUrl, bgColor, triggerType, delaySeconds } =
+      req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required." });
+    }
+
+    const toaster = await prisma.toaster.create({
+      data: {
+        message,
+        ctaText: ctaText || null,
+        ctaUrl: ctaUrl || null,
+        bgColor: bgColor || "#111827",
+        triggerType: triggerType || "immediate",
+        delaySeconds: Number(delaySeconds) || 0,
+        userId: req.userId,
       },
     });
 
-    res.json({ siteId, plan: user.plan, widgets: { popups } });
+    res.status(201).json({ message: "Toaster created!", toaster });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+// Get all toasters for logged-in user
+app.get("/api/toasters", authMiddleware, async (req, res) => {
+  try {
+    const toasters = await prisma.toaster.findMany({
+      where: { userId: req.userId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ toasters });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+// Delete a toaster
+app.delete("/api/toasters/:id", authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const toaster = await prisma.toaster.findUnique({ where: { id } });
+
+    if (!toaster) {
+      return res.status(404).json({ error: "Toaster not found." });
+    }
+
+    if (toaster.userId !== req.userId) {
+      return res.status(403).json({ error: "You don't own this toaster." });
+    }
+
+    await prisma.toaster.delete({ where: { id } });
+
+    res.json({ message: "Toaster deleted." });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Something went wrong." });

@@ -18,10 +18,11 @@ model User {
   email     String   @unique
   password  String
   siteId    String   @unique @default(uuid())
-  plan      String   @default("free") // "free" or "pro"
+  plan      String   @default("free")
   createdAt DateTime @default(now())
   popups    Popup[]
   contacts  Contact[]
+  toasters  Toaster[]
 }
 
 model Popup {
@@ -59,4 +60,19 @@ model Event {
 
   contactId  String
   contact    Contact  @relation(fields: [contactId], references: [id])
+}
+
+model Toaster {
+  id            String   @id @default(uuid())
+  message       String
+  ctaText       String?
+  ctaUrl        String?
+  bgColor       String   @default("#111827")
+  triggerType   String   @default("immediate") // "immediate" or "delay"
+  delaySeconds  Int      @default(0)
+  views         Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
 }
