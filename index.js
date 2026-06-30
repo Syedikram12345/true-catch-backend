@@ -478,7 +478,7 @@ app.post("/api/payment/create-order", authMiddleware, async (req, res) => {
     const order = await razorpay.orders.create({
       amount: 19900, // amount in paise (₹199 = 19900 paise)
       currency: "INR",
-      receipt: `receipt_${req.userId}_${Date.now()}`,
+      receipt: `rcpt_${Date.now()}`,
       notes: {
         userId: req.userId,
       },
