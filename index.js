@@ -21,14 +21,15 @@ const razorpay = new Razorpay({
 });
 
 app.use(express.static("public"));
-
 app.use(cors());
 app.use(express.json());
 
+// ─── Health Check ───────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.send("TrueCatch backend is running 🚀");
 });
 
+// ─── Auth ────────────────────────────────────────────────────────
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -37,9 +38,7 @@ app.post("/api/signup", async (req, res) => {
       return res.status(400).json({ error: "All fields are required." });
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-    });
+    const existingUser = await prisma.user.findUnique({ where: { email } });
 
     if (existingUser) {
       return res.status(400).json({ error: "Email is already registered." });
@@ -48,11 +47,7 @@ app.post("/api/signup", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-      },
+      data: { name, email, password: hashedPassword },
     });
 
     res.status(201).json({
@@ -75,9 +70,7 @@ app.post("/api/login", async (req, res) => {
         .json({ error: "Email and password are required." });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
       return res.status(401).json({ error: "Invalid email or password." });
@@ -129,7 +122,7 @@ app.get("/api/me", authMiddleware, async (req, res) => {
   }
 });
 
-// Create a new popup (protected — must be logged in)
+// ─── Popups ──────────────────────────────────────────────────────
 app.post("/api/popups", authMiddleware, async (req, res) => {
   try {
     const { title, message, buttonText, delaySeconds } = req.body;
@@ -138,7 +131,6 @@ app.post("/api/popups", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "All fields are required." });
     }
 
-    // Plan gating — free users max 3 popups
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
       select: { plan: true },
@@ -175,7 +167,6 @@ app.post("/api/popups", authMiddleware, async (req, res) => {
   }
 });
 
-// Get all popups for the logged-in user
 app.get("/api/popups", authMiddleware, async (req, res) => {
   try {
     const popups = await prisma.popup.findMany({
@@ -190,40 +181,6 @@ app.get("/api/popups", authMiddleware, async (req, res) => {
   }
 });
 
-// Public route — fetch a single popup's config (no auth, visitors use this)
-app.get("/api/public/popups/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const popup = await prisma.popup.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        title: true,
-        message: true,
-        buttonText: true,
-        delaySeconds: true,
-      },
-    });
-
-    if (!popup) {
-      return res.status(404).json({ error: "Popup not found." });
-    }
-
-    // Track a view every time this config is fetched
-    await prisma.popup.update({
-      where: { id },
-      data: { views: { increment: 1 } },
-    });
-
-    res.json({ popup });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
-
-// Delete a popup (only if it belongs to the logged-in user)
 app.delete("/api/popups/:id", authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -247,7 +204,174 @@ app.delete("/api/popups/:id", authMiddleware, async (req, res) => {
   }
 });
 
-// Public route — visitor submits their email through the popup
+// ─── Toasters ────────────────────────────────────────────────────
+app.post("/api/toasters", authMiddleware, async (req, res) => {
+  try {
+    const { message, ctaText, ctaUrl, bgColor, triggerType, delaySeconds } =
+      req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required." });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { plan: true },
+    });
+
+    if (user.plan === "free") {
+      const toasterCount = await prisma.toaster.count({
+        where: { userId: req.userId },
+      });
+
+      if (toasterCount >= 1) {
+        return res.status(403).json({
+          error:
+            "Free plan limit reached. Upgrade to Pro for unlimited toasters.",
+          limitReached: true,
+        });
+      }
+    }
+
+    const toaster = await prisma.toaster.create({
+      data: {
+        message,
+        ctaText: ctaText || null,
+        ctaUrl: ctaUrl || null,
+        bgColor: bgColor || "#111827",
+        triggerType: triggerType || "immediate",
+        delaySeconds: Number(delaySeconds) || 0,
+        userId: req.userId,
+      },
+    });
+
+    res.status(201).json({ message: "Toaster created!", toaster });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+app.get("/api/toasters", authMiddleware, async (req, res) => {
+  try {
+    const toasters = await prisma.toaster.findMany({
+      where: { userId: req.userId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ toasters });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+app.delete("/api/toasters/:id", authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const toaster = await prisma.toaster.findUnique({ where: { id } });
+
+    if (!toaster) {
+      return res.status(404).json({ error: "Toaster not found." });
+    }
+
+    if (toaster.userId !== req.userId) {
+      return res.status(403).json({ error: "You don't own this toaster." });
+    }
+
+    await prisma.toaster.delete({ where: { id } });
+
+    res.json({ message: "Toaster deleted." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+// ─── Public Routes ───────────────────────────────────────────────
+app.get("/api/public/site/:siteId", async (req, res) => {
+  try {
+    const { siteId } = req.params;
+
+    const user = await prisma.user.findUnique({
+      where: { siteId },
+      select: { id: true, plan: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "Site not found." });
+    }
+
+    const [popups, toasters] = await Promise.all([
+      prisma.popup.findMany({
+        where: { userId: user.id },
+        select: {
+          id: true,
+          title: true,
+          message: true,
+          buttonText: true,
+          delaySeconds: true,
+        },
+      }),
+      prisma.toaster.findMany({
+        where: { userId: user.id },
+        select: {
+          id: true,
+          message: true,
+          ctaText: true,
+          ctaUrl: true,
+          bgColor: true,
+          triggerType: true,
+          delaySeconds: true,
+        },
+      }),
+    ]);
+
+    if (toasters.length > 0) {
+      await prisma.toaster.updateMany({
+        where: { userId: user.id },
+        data: { views: { increment: 1 } },
+      });
+    }
+
+    res.json({ siteId, plan: user.plan, widgets: { popups, toasters } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+app.get("/api/public/popups/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const popup = await prisma.popup.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        message: true,
+        buttonText: true,
+        delaySeconds: true,
+      },
+    });
+
+    if (!popup) {
+      return res.status(404).json({ error: "Popup not found." });
+    }
+
+    await prisma.popup.update({
+      where: { id },
+      data: { views: { increment: 1 } },
+    });
+
+    res.json({ popup });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
 
 app.post("/api/public/popups/:id/submit", async (req, res) => {
   try {
@@ -263,27 +387,6 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
       include: { user: true },
     });
 
-    // Plan gating — free users max 100 contacts
-    if (popup.user.plan === "free") {
-      const contactCount = await prisma.contact.count({
-        where: { userId: popup.userId },
-      });
-
-      if (contactCount >= 100) {
-        // Still thank the visitor, just don't save the contact
-        return res.json({ message: "Thank you!" });
-      }
-    }
-
-    if (!popup) {
-      return res.status(404).json({ error: "Popup not found." });
-    }
-
-    const popup = await prisma.popup.findUnique({
-      where: { id },
-      include: { user: true },
-    });
-
     if (!popup) {
       return res.status(404).json({ error: "Popup not found." });
     }
@@ -299,9 +402,6 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
       }
     }
 
-    // rest of the route continues...
-
-    // Find or create the contact for this email, scoped to the popup's owner
     const contact = await prisma.contact.upsert({
       where: {
         userId_email: {
@@ -309,14 +409,13 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
           email,
         },
       },
-      update: {}, // contact already exists, nothing to change on the contact itself
+      update: {},
       create: {
         email,
         userId: popup.userId,
       },
     });
 
-    // Log this as an event on that contact's timeline
     await prisma.event.create({
       data: {
         type: "popup_submitted",
@@ -360,8 +459,6 @@ app.post("/api/public/track", async (req, res) => {
       return res.status(400).json({ error: "email and type are required." });
     }
 
-    // We need to know which TrueCatch user this event belongs to.
-    // For now, we derive it from a popup ID (since that's the only "identity" we have on a page).
     const popup = await prisma.popup.findUnique({ where: { id: popupId } });
 
     if (!popup) {
@@ -391,6 +488,7 @@ app.post("/api/public/track", async (req, res) => {
   }
 });
 
+// ─── Contacts ────────────────────────────────────────────────────
 app.get("/api/contacts", authMiddleware, async (req, res) => {
   try {
     const contacts = await prisma.contact.findMany({
@@ -406,156 +504,14 @@ app.get("/api/contacts", authMiddleware, async (req, res) => {
   }
 });
 
-// Public route — fetch all active widgets for a site (used by embed script)
-app.get("/api/public/site/:siteId", async (req, res) => {
-  try {
-    const { siteId } = req.params;
-
-    const user = await prisma.user.findUnique({
-      where: { siteId },
-      select: { id: true, plan: true },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "Site not found." });
-    }
-
-    const [popups, toasters] = await Promise.all([
-      prisma.popup.findMany({
-        where: { userId: user.id },
-        select: {
-          id: true,
-          title: true,
-          message: true,
-          buttonText: true,
-          delaySeconds: true,
-        },
-      }),
-      prisma.toaster.findMany({
-        where: { userId: user.id },
-        select: {
-          id: true,
-          message: true,
-          ctaText: true,
-          ctaUrl: true,
-          bgColor: true,
-          triggerType: true,
-          delaySeconds: true,
-        },
-      }),
-    ]);
-
-    // Track views for all toasters
-    if (toasters.length > 0) {
-      await prisma.toaster.updateMany({
-        where: { userId: user.id },
-        data: { views: { increment: 1 } },
-      });
-    }
-
-    res.json({ siteId, plan: user.plan, widgets: { popups, toasters } });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
-// Create a toaster
-app.post("/api/toasters", authMiddleware, async (req, res) => {
-  try {
-    const { message, ctaText, ctaUrl, bgColor, triggerType, delaySeconds } =
-      req.body;
-
-    if (!message) {
-      return res.status(400).json({ error: "Message is required." });
-    }
-
-    // Plan gating — free users max 1 toaster
-    const user = await prisma.user.findUnique({
-      where: { id: req.userId },
-      select: { plan: true },
-    });
-
-    if (user.plan === "free") {
-      const toasterCount = await prisma.toaster.count({
-        where: { userId: req.userId },
-      });
-
-      if (toasterCount >= 1) {
-        return res.status(403).json({
-          error:
-            "Free plan limit reached. Upgrade to Pro for unlimited toasters.",
-          limitReached: true,
-        });
-      }
-    }
-
-    const toaster = await prisma.toaster.create({
-      data: {
-        message,
-        ctaText: ctaText || null,
-        ctaUrl: ctaUrl || null,
-        bgColor: bgColor || "#111827",
-        triggerType: triggerType || "immediate",
-        delaySeconds: Number(delaySeconds) || 0,
-        userId: req.userId,
-      },
-    });
-
-    res.status(201).json({ message: "Toaster created!", toaster });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
-
-// Get all toasters for logged-in user
-app.get("/api/toasters", authMiddleware, async (req, res) => {
-  try {
-    const toasters = await prisma.toaster.findMany({
-      where: { userId: req.userId },
-      orderBy: { createdAt: "desc" },
-    });
-
-    res.json({ toasters });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
-
-// Delete a toaster
-app.delete("/api/toasters/:id", authMiddleware, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const toaster = await prisma.toaster.findUnique({ where: { id } });
-
-    if (!toaster) {
-      return res.status(404).json({ error: "Toaster not found." });
-    }
-
-    if (toaster.userId !== req.userId) {
-      return res.status(403).json({ error: "You don't own this toaster." });
-    }
-
-    await prisma.toaster.delete({ where: { id } });
-
-    res.json({ message: "Toaster deleted." });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
-
+// ─── Payments ────────────────────────────────────────────────────
 app.post("/api/payment/create-order", authMiddleware, async (req, res) => {
   try {
     const order = await razorpay.orders.create({
-      amount: 19900, // amount in paise (₹199 = 19900 paise)
+      amount: 19900,
       currency: "INR",
       receipt: `rcpt_${Date.now()}`,
-      notes: {
-        userId: req.userId,
-      },
+      notes: { userId: req.userId },
     });
 
     res.json({
@@ -574,7 +530,6 @@ app.post("/api/payment/verify", authMiddleware, async (req, res) => {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
       req.body;
 
-    // Verify the payment signature
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -585,7 +540,6 @@ app.post("/api/payment/verify", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "Invalid payment signature." });
     }
 
-    // Upgrade the user to Pro
     await prisma.user.update({
       where: { id: req.userId },
       data: { plan: "pro" },
@@ -598,6 +552,7 @@ app.post("/api/payment/verify", authMiddleware, async (req, res) => {
   }
 });
 
+// ─── Server ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
