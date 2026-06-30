@@ -138,6 +138,26 @@ app.post("/api/popups", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "All fields are required." });
     }
 
+    // Plan gating — free users max 3 popups
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { plan: true },
+    });
+
+    if (user.plan === "free") {
+      const popupCount = await prisma.popup.count({
+        where: { userId: req.userId },
+      });
+
+      if (popupCount >= 3) {
+        return res.status(403).json({
+          error:
+            "Free plan limit reached. Upgrade to Pro for unlimited popups.",
+          limitReached: true,
+        });
+      }
+    }
+
     const popup = await prisma.popup.create({
       data: {
         title,
@@ -243,9 +263,43 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
       include: { user: true },
     });
 
+    // Plan gating — free users max 100 contacts
+    if (popup.user.plan === "free") {
+      const contactCount = await prisma.contact.count({
+        where: { userId: popup.userId },
+      });
+
+      if (contactCount >= 100) {
+        // Still thank the visitor, just don't save the contact
+        return res.json({ message: "Thank you!" });
+      }
+    }
+
     if (!popup) {
       return res.status(404).json({ error: "Popup not found." });
     }
+
+    const popup = await prisma.popup.findUnique({
+      where: { id },
+      include: { user: true },
+    });
+
+    if (!popup) {
+      return res.status(404).json({ error: "Popup not found." });
+    }
+
+    // Plan gating — free users max 100 contacts
+    if (popup.user.plan === "free") {
+      const contactCount = await prisma.contact.count({
+        where: { userId: popup.userId },
+      });
+
+      if (contactCount >= 100) {
+        return res.json({ message: "Thank you!" });
+      }
+    }
+
+    // rest of the route continues...
 
     // Find or create the contact for this email, scoped to the popup's owner
     const contact = await prisma.contact.upsert({
@@ -413,6 +467,26 @@ app.post("/api/toasters", authMiddleware, async (req, res) => {
 
     if (!message) {
       return res.status(400).json({ error: "Message is required." });
+    }
+
+    // Plan gating — free users max 1 toaster
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { plan: true },
+    });
+
+    if (user.plan === "free") {
+      const toasterCount = await prisma.toaster.count({
+        where: { userId: req.userId },
+      });
+
+      if (toasterCount >= 1) {
+        return res.status(403).json({
+          error:
+            "Free plan limit reached. Upgrade to Pro for unlimited toasters.",
+          limitReached: true,
+        });
+      }
     }
 
     const toaster = await prisma.toaster.create({
