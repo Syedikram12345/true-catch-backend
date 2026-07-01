@@ -49,26 +49,36 @@ model PopupView {
 }
 
 model Contact {
-  id        String   @id @default(uuid())
-  email     String
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  email      String
+  createdAt  DateTime @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  // Enrichment fields
+  firstName  String?
+  lastName   String?
+  country    String?
+  city       String?
+  device     String?
+  browser    String?
+  os         String?
+  pageUrl    String?  // first page they visited
 
-  events    Event[]
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  events     Event[]
 
-  @@unique([userId, email]) // one contact per email, per TrueCatch account
+  @@unique([userId, email])
 }
 
 model Event {
-  id         String   @id @default(uuid())
-  type       String   // "popup_submitted", "page_view", "clicked_pricing", etc.
-  metadata   Json?    // flexible extra info, e.g. { "popupId": "...", "page": "/pricing" }
-  createdAt  DateTime @default(now())
+  id          String   @id @default(uuid())
+  type        String
+  metadata    Json?
+  createdAt   DateTime @default(now())
 
-  contactId  String
-  contact    Contact  @relation(fields: [contactId], references: [id])
+  visitorId   String?  // anonymous visitor ID before email is known
+  contactId   String?  // null until visitor is identified
+  contact     Contact? @relation(fields: [contactId], references: [id])
 }
 
 model Toaster {

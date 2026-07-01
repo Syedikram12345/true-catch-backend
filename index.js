@@ -727,6 +727,118 @@ app.get("/api/analytics", authMiddleware, async (req, res) => {
   }
 });
 
+// Public route — track any custom event (anonymous or identified)
+app.post("/api/public/events", async (req, res) => {
+  try {
+    const { siteId, visitorId, email, type, metadata } = req.body;
+
+    if (!type) {
+      return res.status(400).json({ error: "Event type is required." });
+    }
+
+    if (!siteId) {
+      return res.status(400).json({ error: "siteId is required." });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { siteId },
+      select: { id: true, plan: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "Site not found." });
+    }
+
+    // Parse device/browser from user agent
+    const userAgent = req.headers["user-agent"] || "";
+    const isMobile = /mobile/i.test(userAgent);
+    const isTablet = /tablet|ipad/i.test(userAgent);
+    const deviceType = isTablet ? "tablet" : isMobile ? "mobile" : "desktop";
+    const browserMatch = userAgent.match(/(chrome|safari|firefox|edge|opera)/i);
+    const browser = browserMatch ? browserMatch[0] : "Unknown";
+    const osMatch = userAgent.match(
+      /(windows|mac|linux|android|ios|iphone|ipad)/i,
+    );
+    const os = osMatch ? osMatch[0] : "Unknown";
+
+    let contactId = null;
+
+    // If email is known, find or create the contact
+    if (email) {
+      const contact = await prisma.contact.upsert({
+        where: {
+          userId_email: { userId: user.id, email },
+        },
+        update: {
+          device: deviceType,
+          browser,
+          os,
+        },
+        create: {
+          email,
+          userId: user.id,
+          device: deviceType,
+          browser,
+          os,
+        },
+      });
+
+      contactId = contact.id;
+
+      // Merge any previous anonymous events from this visitorId
+      if (visitorId) {
+        await prisma.event.updateMany({
+          where: {
+            visitorId,
+            contactId: null,
+          },
+          data: { contactId: contact.id },
+        });
+      }
+    }
+
+    // Create the event
+    await prisma.event.create({
+      data: {
+        type,
+        metadata: metadata || {},
+        visitorId: visitorId || null,
+        contactId,
+      },
+    });
+
+    res.status(201).json({ message: "Event tracked." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
+// Get events for a specific contact (for the contact detail view)
+app.get("/api/contacts/:id/events", authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contact = await prisma.contact.findUnique({
+      where: { id },
+    });
+
+    if (!contact || contact.userId !== req.userId) {
+      return res.status(404).json({ error: "Contact not found." });
+    }
+
+    const events = await prisma.event.findMany({
+      where: { contactId: id },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ events });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
 // ─── Server ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
