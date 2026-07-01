@@ -11,19 +11,28 @@
   const API_BASE = `${scriptUrl.origin}/api/public`;
 
   // ── Anonymous visitor identity ──────────────────────────────
-  // Generate or retrieve a persistent visitorId for this browser
   let visitorId = localStorage.getItem("tc_visitor_id");
   if (!visitorId) {
     visitorId = "v_" + Math.random().toString(36).slice(2) + Date.now();
     localStorage.setItem("tc_visitor_id", visitorId);
   }
 
-  // Track what email we know (if visitor has submitted a popup before)
   let knownEmail = localStorage.getItem("tc_email") || null;
+
+  // ── Rich context — captured automatically ───────────────────
+  function getContext() {
+    return {
+      url: window.location.href,
+      title: document.title,
+      referrer: document.referrer || null,
+      screen: `${window.screen.width}x${window.screen.height}`,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      language: navigator.language,
+    };
+  }
 
   // ── Public SDK ───────────────────────────────────────────────
   window.TrueCatch = {
-    // Track any custom event
     track: function (type, metadata) {
       fetch(`${API_BASE}/events`, {
         method: "POST",
@@ -34,28 +43,27 @@
           email: knownEmail,
           type,
           metadata: metadata || {},
+          context: getContext(),
         }),
       }).catch((err) => console.error("TrueCatch: track failed", err));
     },
 
-    // Identify a visitor manually (useful for logged-in users)
     identify: function (email, traits) {
       knownEmail = email;
       localStorage.setItem("tc_email", email);
       window.TrueCatch.track("identify", { email, ...traits });
     },
 
-    // Track a page view automatically
     page: function () {
       window.TrueCatch.track("page_view", {
         url: window.location.href,
         title: document.title,
-        referrer: document.referrer,
+        referrer: document.referrer || null,
       });
     },
   };
 
-  // Auto-track page view on every load
+  // Auto-track page view
   window.TrueCatch.page();
 
   // ── Load widgets ─────────────────────────────────────────────
@@ -108,7 +116,6 @@
 
     document.body.appendChild(overlay);
 
-    // Track popup view event
     window.TrueCatch.track("popup_viewed", {
       popupId: popup.id,
       popupTitle: popup.title,
@@ -123,28 +130,24 @@
       const email = document.getElementById("tc-email").value;
       if (!email) return;
 
-      // Identify this visitor now that we know their email
       knownEmail = email;
       localStorage.setItem("tc_email", email);
 
       fetch(`${API_BASE}/popups/${popup.id}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({
+          email,
+          visitorId,
+          context: getContext(),
+        }),
       })
         .then((res) => res.json())
         .then(() => {
-          // Merge all previous anonymous events now that email is known
-          fetch(`${API_BASE}/events`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              siteId,
-              visitorId,
-              email,
-              type: "popup_submitted",
-              metadata: { popupId: popup.id, popupTitle: popup.title },
-            }),
+          // Fire merged event so all previous anonymous events get linked
+          window.TrueCatch.track("popup_submitted", {
+            popupId: popup.id,
+            popupTitle: popup.title,
           });
 
           const msg = document.getElementById("tc-msg");
@@ -185,7 +188,6 @@
     document.body.style.paddingTop = "44px";
     document.body.prepend(bar);
 
-    // Track toaster view
     window.TrueCatch.track("toaster_viewed", { toasterId: toaster.id });
 
     document.getElementById("tc-toast-close").addEventListener("click", () => {

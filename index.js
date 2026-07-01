@@ -8,6 +8,8 @@ import authMiddleware from "./middleware/auth.js";
 import { Resend } from "resend";
 import Razorpay from "razorpay";
 import crypto from "crypto";
+import { UAParser } from "ua-parser-js";
+import fetch from "node-fetch";
 
 dotenv.config();
 
@@ -480,7 +482,7 @@ app.get("/api/public/popups/:id", async (req, res) => {
 app.post("/api/public/popups/:id/submit", async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.body;
+    const { email, visitorId, context } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: "Email is required." });
@@ -495,35 +497,88 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
       return res.status(404).json({ error: "Popup not found." });
     }
 
-    // Plan gating — free users max 100 contacts
+    // Plan gating
     if (popup.user.plan === "free") {
       const contactCount = await prisma.contact.count({
         where: { userId: popup.userId },
       });
-
       if (contactCount >= 100) {
         return res.json({ message: "Thank you!" });
       }
     }
 
+    // Parse device/browser
+    const userAgent = req.headers["user-agent"] || "";
+    const parser = new UAParser(userAgent);
+    const uaResult = parser.getResult();
+    const device = uaResult.device.type || "desktop";
+    const browser = uaResult.browser.name || "Unknown";
+    const os = uaResult.os.name || "Unknown";
+
+    // Geo lookup
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.socket.remoteAddress ||
+      "";
+
+    let country = null;
+    let city = null;
+
+    if (ip && ip !== "::1" && !ip.startsWith("127.")) {
+      try {
+        const geoRes = await fetch(
+          `http://ip-api.com/json/${ip}?fields=country,city,status`,
+        );
+        const geoData = await geoRes.json();
+        if (geoData.status === "success") {
+          country = geoData.country;
+          city = geoData.city;
+        }
+      } catch (geoErr) {
+        console.error("Geo lookup failed:", geoErr);
+      }
+    }
+
+    // Find or create contact with full enrichment
     const contact = await prisma.contact.upsert({
       where: {
-        userId_email: {
-          userId: popup.userId,
-          email,
-        },
+        userId_email: { userId: popup.userId, email },
       },
-      update: {},
+      update: { device, browser, os, country, city, pageUrl: context?.url },
       create: {
         email,
         userId: popup.userId,
+        device,
+        browser,
+        os,
+        country,
+        city,
+        pageUrl: context?.url || null,
       },
     });
+
+    // Merge anonymous events
+    if (visitorId) {
+      await prisma.event.updateMany({
+        where: { visitorId, contactId: null },
+        data: { contactId: contact.id },
+      });
+    }
 
     await prisma.event.create({
       data: {
         type: "popup_submitted",
-        metadata: { popupId: popup.id, popupTitle: popup.title },
+        metadata: {
+          popupId: popup.id,
+          popupTitle: popup.title,
+          device,
+          browser,
+          os,
+          country,
+          city,
+          url: context?.url || null,
+        },
+        visitorId: visitorId || null,
         contactId: contact.id,
       },
     });
@@ -540,8 +595,11 @@ app.post("/api/public/popups/:id/submit", async (req, res) => {
         subject: `New lead from "${popup.title}"`,
         html: `
           <h2>You've got a new lead! 🎉</h2>
+          <p><strong>Email:</strong> ${email}</p>
           <p><strong>Popup:</strong> ${popup.title}</p>
-          <p><strong>Visitor email:</strong> ${email}</p>
+          <p><strong>Device:</strong> ${device} · ${browser} · ${os}</p>
+          ${country ? `<p><strong>Location:</strong> ${city ? city + ", " : ""}${country}</p>` : ""}
+          ${context?.url ? `<p><strong>Page:</strong> ${context.url}</p>` : ""}
         `,
       });
     } catch (emailError) {
@@ -730,14 +788,10 @@ app.get("/api/analytics", authMiddleware, async (req, res) => {
 // Public route — track any custom event (anonymous or identified)
 app.post("/api/public/events", async (req, res) => {
   try {
-    const { siteId, visitorId, email, type, metadata } = req.body;
+    const { siteId, visitorId, email, type, metadata, context } = req.body;
 
-    if (!type) {
-      return res.status(400).json({ error: "Event type is required." });
-    }
-
-    if (!siteId) {
-      return res.status(400).json({ error: "siteId is required." });
+    if (!type || !siteId) {
+      return res.status(400).json({ error: "type and siteId are required." });
     }
 
     const user = await prisma.user.findUnique({
@@ -749,59 +803,101 @@ app.post("/api/public/events", async (req, res) => {
       return res.status(404).json({ error: "Site not found." });
     }
 
-    // Parse device/browser from user agent
+    // ── Parse browser/device from user agent ──────────────────
     const userAgent = req.headers["user-agent"] || "";
-    const isMobile = /mobile/i.test(userAgent);
-    const isTablet = /tablet|ipad/i.test(userAgent);
-    const deviceType = isTablet ? "tablet" : isMobile ? "mobile" : "desktop";
-    const browserMatch = userAgent.match(/(chrome|safari|firefox|edge|opera)/i);
-    const browser = browserMatch ? browserMatch[0] : "Unknown";
-    const osMatch = userAgent.match(
-      /(windows|mac|linux|android|ios|iphone|ipad)/i,
-    );
-    const os = osMatch ? osMatch[0] : "Unknown";
+    const parser = new UAParser(userAgent);
+    const uaResult = parser.getResult();
+
+    const device = uaResult.device.type || "desktop";
+    const browser = uaResult.browser.name || "Unknown";
+    const os = uaResult.os.name || "Unknown";
+
+    // ── Get country/city from IP ──────────────────────────────
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.socket.remoteAddress ||
+      "";
+
+    let country = null;
+    let city = null;
+
+    // Only do geo lookup for real IPs (not localhost)
+    if (ip && ip !== "::1" && !ip.startsWith("127.")) {
+      try {
+        const geoRes = await fetch(
+          `http://ip-api.com/json/${ip}?fields=country,city,status`,
+        );
+        const geoData = await geoRes.json();
+        if (geoData.status === "success") {
+          country = geoData.country;
+          city = geoData.city;
+        }
+      } catch (geoErr) {
+        console.error("Geo lookup failed:", geoErr);
+      }
+    }
+
+    // ── Build rich metadata ───────────────────────────────────
+    const enrichedMetadata = {
+      ...metadata,
+      // Context from browser (sent by embed script)
+      url: context?.url || null,
+      referrer: context?.referrer || null,
+      screen: context?.screen || null,
+      timezone: context?.timezone || null,
+      language: context?.language || null,
+      // Enriched on backend
+      device,
+      browser,
+      os,
+      country,
+      city,
+    };
 
     let contactId = null;
 
-    // If email is known, find or create the contact
+    // ── Identify if email is known ────────────────────────────
     if (email) {
       const contact = await prisma.contact.upsert({
         where: {
           userId_email: { userId: user.id, email },
         },
         update: {
-          device: deviceType,
+          device,
           browser,
           os,
+          country,
+          city,
+          pageUrl: context?.url || undefined,
         },
         create: {
           email,
           userId: user.id,
-          device: deviceType,
+          device,
           browser,
           os,
+          country,
+          city,
+          pageUrl: context?.url || undefined,
         },
       });
 
       contactId = contact.id;
 
-      // Merge any previous anonymous events from this visitorId
+      // Merge all previous anonymous events from this visitorId
       if (visitorId) {
         await prisma.event.updateMany({
-          where: {
-            visitorId,
-            contactId: null,
-          },
+          where: { visitorId, contactId: null },
           data: { contactId: contact.id },
         });
       }
     }
 
-    // Create the event
+    // ── Create the event ─────────────────────────────────────
     await prisma.event.create({
       data: {
         type,
-        metadata: metadata || {},
+        metadata: enrichedMetadata,
         visitorId: visitorId || null,
         contactId,
       },
